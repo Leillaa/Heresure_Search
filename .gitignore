@@ -1,0 +1,18 @@
+# секреты
+.env
+
+# виртуальные окружения
+.venv/
+.venv-1/
+__pycache__/
+*.pyc
+
+# локальные настройки Claude Code (не для шаринга)
+.claude/settings.local.json
+
+# сырые/промежуточные данные — большие файлы и/или содержат
+# персональные данные (имена, email, телефоны) реальных людей,
+# в git такому не место
+AllValidLicensesIndividual.csv
+life_licenses_broward_miamidade.txt
+staging_licenses.csv
