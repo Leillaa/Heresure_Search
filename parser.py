@@ -27,6 +27,25 @@ from pathlib import Path
 
 import requests
 
+ENV_FILE = Path(__file__).parent / ".env"
+
+
+def load_env(path: Path) -> None:
+    """Простой парсер .env — без сторонних зависимостей (как в остальных
+    скриптах проекта). Не перезаписывает переменные, уже выставленные
+    в окружении (например, systemd Environment=/EnvironmentFile=)."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env(ENV_FILE)
+
 URL = "https://www.myfloridacfo.com/downloads/AAS/LicenseeSearch/AllValidLicensesIndividual.csv"
 RAW_CSV = Path("AllValidLicensesIndividual.csv")
 STAGING_CSV = Path("staging_licenses.csv")
@@ -40,13 +59,18 @@ headers = {
     )
 }
 
-# --- параметры подключения к Postgres ---
-PG_BIN = "/Library/PostgreSQL/14/bin/psql"
-PG_HOST = "localhost"
-PG_PORT = "5432"
-PG_USER = "postgres"
-PG_DB = "Agents_Heresure"
-PG_PASSWORD = os.environ.get("PGPASSWORD", "1560")
+# --- параметры подключения к Postgres (локально и на сервере — из .env) ---
+PG_BIN = os.environ.get("PG_BIN", "psql")
+PG_HOST = os.environ.get("PGHOST", "localhost")
+PG_PORT = os.environ.get("PGPORT", "5432")
+PG_USER = os.environ.get("PGUSER", "postgres")
+PG_DB = os.environ.get("PGDATABASE", "Agents_Heresure")
+PG_PASSWORD = os.environ.get("PGPASSWORD")
+if not PG_PASSWORD:
+    raise SystemExit(
+        "Не задана переменная окружения PGPASSWORD "
+        "(проверь .env — см. .env.example)"
+    )
 
 # License TYCL Desc, которые считаем "life" / "life and health"
 LIFE_DESCS = {

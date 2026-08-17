@@ -3,27 +3,91 @@
 Постранично (50 на страницу), с кнопкой "Отправить письмо" у каждой
 строки — пока кнопка ничего не делает (заглушка под будущую отправку).
 
-Запуск:
+Настройки (БД, доступ) берутся из .env в этой же папке — см. .env.example.
+
+Локальный запуск (dev-сервер Flask):
     python3 app.py
 Открыть в браузере:
     http://127.0.0.1:5000
+
+Прод-запуск (сервер, за nginx) — см. deploy/README.md:
+    gunicorn -w 2 -b 127.0.0.1:8000 app:app
 """
 
+import functools
+import hmac
 import os
+from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
-from flask import Flask, render_template_string, request
+from flask import Flask, Response, render_template_string, request
 
-PG_HOST = "localhost"
-PG_PORT = "5432"
-PG_USER = "postgres"
-PG_DB = "Agents_Heresure"
-PG_PASSWORD = os.environ.get("PGPASSWORD", "1560")
+ENV_FILE = Path(__file__).parent / ".env"
+
+
+def load_env(path: Path) -> None:
+    """Простой парсер .env — без сторонних зависимостей (как в остальных
+    скриптах проекта). Не перезаписывает переменные, уже выставленные
+    в окружении (например, systemd Environment=)."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def get_required(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise SystemExit(f"Не задана переменная {name} (проверь .env)")
+    return value
+
+
+load_env(ENV_FILE)
+
+PG_HOST = os.environ.get("PGHOST", "localhost")
+PG_PORT = os.environ.get("PGPORT", "5432")
+PG_USER = os.environ.get("PGUSER", "postgres")
+PG_DB = os.environ.get("PGDATABASE", "Agents_Heresure")
+PG_PASSWORD = get_required("PGPASSWORD")  # без дефолта — секрет должен приходить из .env
+
+# HTTP Basic Auth — на сервере в базе реальные ФИО/email/телефоны, доступ
+# только для команды. Формат в .env: BASIC_AUTH_USERS=user1:pass1,user2:pass2
+# Если переменная не задана — auth выключена (для локальной разработки).
+_raw_users = os.environ.get("BASIC_AUTH_USERS", "")
+BASIC_AUTH_USERS = dict(
+    pair.split(":", 1) for pair in _raw_users.split(",") if ":" in pair
+)
 
 PAGE_SIZE = 50
 
 app = Flask(__name__)
+
+
+def require_auth(view):
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not BASIC_AUTH_USERS:
+            return view(*args, **kwargs)  # auth не настроена (локальная разработка)
+
+        auth = request.authorization
+        valid = (
+            auth
+            and auth.username in BASIC_AUTH_USERS
+            and hmac.compare_digest(auth.password or "", BASIC_AUTH_USERS[auth.username])
+        )
+        if not valid:
+            return Response(
+                "Требуется авторизация.", 401,
+                {"WWW-Authenticate": 'Basic realm="Agents_Heresure"'},
+            )
+        return view(*args, **kwargs)
+
+    return wrapped
 
 
 def to_tel_href(phone: str) -> str:
@@ -181,6 +245,36 @@ TEMPLATE = """
     color: var(--text-muted);
     font-size: 13px;
   }
+  .filters {
+    display: flex;
+    gap: 8px;
+    margin: 0 32px 16px;
+  }
+  .filters a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+  }
+  .filters a:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .filters a.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .filters a .count {
+    opacity: 0.75;
+    font-size: 12px;
+  }
   .toast {
     position: fixed;
     bottom: 20px;
@@ -206,6 +300,18 @@ TEMPLATE = """
   <h1>Licenses — Agents_Heresure</h1>
   <div class="meta">Всего записей: {{ total }} · страница {{ page }} из {{ total_pages }}</div>
 </header>
+
+<div class="filters">
+  <a class="{{ 'active' if status == 'all' else '' }}" href="?status=all">
+    Все <span class="count">{{ count_all }}</span>
+  </a>
+  <a class="{{ 'active' if status == 'checked' else '' }}" href="?status=checked">
+    Checked <span class="count">{{ count_checked }}</span>
+  </a>
+  <a class="{{ 'active' if status == 'unchecked' else '' }}" href="?status=unchecked">
+    Not checked <span class="count">{{ count_unchecked }}</span>
+  </a>
+</div>
 
 <div class="table-wrap">
   <table>
@@ -250,7 +356,7 @@ TEMPLATE = """
 
 <div class="pagination">
   {% if page > 1 %}
-    <a href="?page={{ page - 1 }}">&larr; Назад</a>
+    <a href="?status={{ status }}&page={{ page - 1 }}">&larr; Назад</a>
   {% else %}
     <span class="disabled">&larr; Назад</span>
   {% endif %}
@@ -258,7 +364,7 @@ TEMPLATE = """
   <span class="page-info">Страница {{ page }} / {{ total_pages }}</span>
 
   {% if page < total_pages %}
-    <a href="?page={{ page + 1 }}">Вперёд &rarr;</a>
+    <a href="?status={{ status }}&page={{ page + 1 }}">Вперёд &rarr;</a>
   {% else %}
     <span class="disabled">Вперёд &rarr;</span>
   {% endif %}
@@ -279,32 +385,55 @@ function notReady(btn) {
 """
 
 
+STATUS_FILTERS = {
+    "all": None,
+    "checked": "checked = true",
+    "unchecked": "checked = false",
+}
+
+
 @app.route("/")
+@require_auth
 def index():
+    status = request.args.get("status", "all")
+    if status not in STATUS_FILTERS:
+        status = "all"
+
     try:
         page = max(1, int(request.args.get("page", 1)))
     except ValueError:
         page = 1
 
     offset = (page - 1) * PAGE_SIZE
+    where_sql = STATUS_FILTERS[status]
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM licenses;")
-            total = cur.fetchone()[0]
+            # Считаем сразу все три цифры для вкладок фильтра — один проход по таблице.
+            cur.execute(
+                """
+                SELECT COUNT(*),
+                       COUNT(*) FILTER (WHERE checked),
+                       COUNT(*) FILTER (WHERE NOT checked)
+                FROM licenses;
+                """
+            )
+            count_all, count_checked, count_unchecked = cur.fetchone()
 
+        total = {"all": count_all, "checked": count_checked, "unchecked": count_unchecked}[status]
         total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
         page = min(page, total_pages)
         offset = (page - 1) * PAGE_SIZE
 
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                """
+                f"""
                 SELECT "License Number", "Full Name", "NPN Number", "License Type",
                        "Business Email", "Business Phone", "Mailing Address",
                        "Personal Email", checked
                 FROM licenses
+                {"WHERE " + where_sql if where_sql else ""}
                 ORDER BY id
                 LIMIT %s OFFSET %s;
                 """,
@@ -319,9 +448,15 @@ def index():
 
     return render_template_string(
         TEMPLATE, rows=rows, page=page, total_pages=total_pages, total=total,
+        status=status, count_all=count_all, count_checked=count_checked,
+        count_unchecked=count_unchecked,
     )
 
 
 if __name__ == "__main__":
-    # bind только на localhost — в базе реальные персональные данные
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    # bind по умолчанию только на localhost — в базе реальные персональные
+    # данные. На сервере приложение запускается через gunicorn (см.
+    # deploy/README.md), этот блок — только для локальной разработки.
+    host = os.environ.get("APP_HOST", "127.0.0.1")
+    port = int(os.environ.get("APP_PORT", "5000"))
+    app.run(host=host, port=port, debug=False)

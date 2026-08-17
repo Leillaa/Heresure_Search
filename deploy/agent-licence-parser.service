@@ -1,0 +1,19 @@
+[Unit]
+Description=Agent Licence daily parser (скачать реестр FL DFS, отфильтровать, догрузить новых агентов)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=agentapp
+Group=agentapp
+WorkingDirectory=/opt/agent_licence
+EnvironmentFile=/opt/agent_licence/.env
+ExecStart=/opt/agent_licence/.venv/bin/python3 /opt/agent_licence/parser.py
+TimeoutStartSec=3600
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/agent_licence
+ProtectHome=true

@@ -34,12 +34,12 @@ from pathlib import Path
 
 ENV_FILE = Path(__file__).parent / ".env"
 
-PG_BIN = "/Library/PostgreSQL/14/bin/psql"
-PG_HOST = "localhost"
-PG_PORT = "5432"
-PG_USER = "postgres"
-PG_DB = "Agents_Heresure"
-PG_PASSWORD = os.environ.get("PGPASSWORD", "1560")
+PG_BIN = os.environ.get("PG_BIN", "psql")
+PG_HOST = os.environ.get("PGHOST", "localhost")
+PG_PORT = os.environ.get("PGPORT", "5432")
+PG_USER = os.environ.get("PGUSER", "postgres")
+PG_DB = os.environ.get("PGDATABASE", "Agents_Heresure")
+PG_PASSWORD = None  # заполняется в main() после load_env(), без дефолта-секрета
 
 SUBJECT = "Test email"
 BODY_TEMPLATE = (
@@ -121,6 +121,8 @@ def open_smtp(host: str, port: int, user: str, password: str) -> smtplib.SMTP:
 
 
 def main() -> None:
+    global PG_PASSWORD
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
                          help=f"Максимум писем за один запуск (по умолчанию {DEFAULT_LIMIT})")
@@ -129,6 +131,9 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                          help="Только показать список получателей, ничего не отправлять и не менять БД")
     args = parser.parse_args()
+
+    load_env(ENV_FILE)  # нужен и для dry-run — без пароля к БД не подключиться
+    PG_PASSWORD = get_required("PGPASSWORD")
 
     candidates = fetch_candidates(args.limit)
 
@@ -144,7 +149,6 @@ def main() -> None:
         print("Dry-run: письма не отправлялись, БД не менялась.")
         return
 
-    load_env(ENV_FILE)
     host = get_required("SMTP_HOST")
     port = int(get_required("SMTP_PORT"))
     user = get_required("SMTP_USER")
