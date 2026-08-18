@@ -8,7 +8,7 @@ User=agentapp
 Group=agentapp
 WorkingDirectory=/opt/agent_licence
 EnvironmentFile=/opt/agent_licence/.env
-ExecStart=/opt/agent_licence/.venv/bin/gunicorn -w 2 -b 127.0.0.1:8000 --access-logfile - --error-logfile - app:app
+ExecStart=/opt/agent_licence/.venv/bin/gunicorn -w 2 -b 127.0.0.1:8000 --access-logfile - --error-logfile - wsgi:app
 Restart=on-failure
 RestartSec=5
 

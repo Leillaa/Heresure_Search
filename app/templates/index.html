@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Licenses — Agents_Heresure</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+<header>
+  <h1>Licenses — Agents_Heresure</h1>
+  <div class="meta">Total records: {{ total }} · page {{ page }} of {{ total_pages }}</div>
+</header>
+
+<div class="filters">
+  <a class="{{ 'active' if status == 'all' else '' }}" href="?status=all">
+    All <span class="count">{{ count_all }}</span>
+  </a>
+  <a class="{{ 'active' if status == 'checked' else '' }}" href="?status=checked">
+    Checked <span class="count">{{ count_checked }}</span>
+  </a>
+  <a class="{{ 'active' if status == 'unchecked' else '' }}" href="?status=unchecked">
+    Not checked <span class="count">{{ count_unchecked }}</span>
+  </a>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Full Name</th>
+        <th>License Type</th>
+        <th>Business Email</th>
+        <th>Business Phone</th>
+        <th>Mailing Address</th>
+        <th>Checked</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td title="{{ row['Full Name'] }}">{{ row['Full Name'] }}</td>
+        <td title="{{ row['License Type'] }}">{{ row['License Type'] }}</td>
+        <td title="{{ row['Business Email'] }}">{{ row['Business Email'] }}</td>
+        {%- set phone_href = row['Business Phone'] | tel_href %}
+        <td title="{{ row['Business Phone'] }}">
+          {% if phone_href %}
+            <a class="phone-link" href="{{ phone_href }}">{{ row['Business Phone'] }}</a>
+          {% else %}
+            {{ row['Business Phone'] }}
+          {% endif %}
+        </td>
+        <td title="{{ row['Mailing Address'] }}">{{ row['Mailing Address'] }}</td>
+        <td>
+          {% if row['checked'] %}
+            <span class="badge true">true</span>
+          {% else %}
+            <span class="badge false">false</span>
+          {% endif %}
+        </td>
+        <td><button class="send-btn" onclick="notReady(this)">Send Email</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="pagination">
+  {% if page > 1 %}
+    <a href="?status={{ status }}&page={{ page - 1 }}">&larr; Back</a>
+  {% else %}
+    <span class="disabled">&larr; Back</span>
+  {% endif %}
+
+  <span class="page-info">Page {{ page }} / {{ total_pages }}</span>
+
+  {% if page < total_pages %}
+    <a href="?status={{ status }}&page={{ page + 1 }}">Next &rarr;</a>
+  {% else %}
+    <span class="disabled">Next &rarr;</span>
+  {% endif %}
+</div>
+
+<div class="toast" id="toast">Sending is not wired up yet</div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+</body>
+</html>

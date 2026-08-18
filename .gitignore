@@ -1,32 +1,45 @@
-# секреты
+# secrets / секреты
 .env
+.env.development
 
-# виртуальные окружения
+# virtual environments / виртуальные окружения
 .venv/
 .venv-1/
 __pycache__/
 *.pyc
 
-# Claude Code — вся локальная папка (настройки, локи, история) не для шаринга
+# [EN] Claude Code — the entire local folder (settings, locks, history) is not for sharing
+# [RU] Claude Code — вся локальная папка (настройки, локи, история) не для шаринга
 .claude/
 
-# сырые/промежуточные данные — большие файлы и/или содержат
-# персональные данные (имена, email, телефоны) реальных людей,
-# в git такому не место
+# [EN] raw/intermediate data — large files and/or containing
+# personal data (names, emails, phones) of real people, no place for it in git
+# [RU] сырые/промежуточные данные — большие файлы и/или содержат
+# персональные данные (имена, email, телефоны) реальных людей, в git такому не место
 AllValidLicensesIndividual.csv
 life_licenses_broward_miamidade.txt
 staging_licenses.csv
 
-# дампы базы (реальные персональные данные) — переносятся на сервер
+# [EN] database dumps (real personal data) — transferred to the server
+# directly via scp, never go into git
+# [RU] дампы базы (реальные персональные данные) — переносятся на сервер
 # напрямую по scp, в git не идут
 *.dump
 
-# --- инфа о конкретном сервере (IP, адрес сайта и т.п.) ---
+# --- [EN] info about the specific server (IP, site URL, etc.) ---
+# Real values live only locally with whoever deploys, never in git.
+# A template with the variable names is in deploy/server.env.example.
+# --- [RU] инфа о конкретном сервере (IP, адрес сайта и т.п.) ---
 # Реальные значения — только локально у того, кто деплоит, никогда в git.
 # Шаблон с именами переменных лежит в deploy/server.env.example.
 deploy/server.env
 
-# --- легаси-скрипты старого ручного пайплайна ---
+# --- [EN] legacy scripts from the old manual pipeline ---
+# Fully replaced by parser.py (downloads + filters + loads into the DB in one
+# script, runs automatically on a schedule — see deploy/README.md).
+# Kept on disk for history, but no longer used by the app
+# and must not end up in new commits.
+# --- [RU] легаси-скрипты старого ручного пайплайна ---
 # Полностью заменены parser.py (скачивает + фильтрует + грузит в БД одним
 # скриптом, запускается автоматически по расписанию — см. deploy/README.md).
 # Оставлены на диске для истории, но больше не используются приложением

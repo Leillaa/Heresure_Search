@@ -1,5 +1,5 @@
 [Unit]
-Description=Agent Licence daily parser (скачать реестр FL DFS, отфильтровать, догрузить новых агентов)
+Description=Agent Licence daily parser (download the FL DFS registry, filter, load new agents / скачать реестр FL DFS, отфильтровать, догрузить новых агентов)
 After=network-online.target postgresql.service
 Wants=network-online.target
 
@@ -9,7 +9,7 @@ User=agentapp
 Group=agentapp
 WorkingDirectory=/opt/agent_licence
 EnvironmentFile=/opt/agent_licence/.env
-ExecStart=/opt/agent_licence/.venv/bin/python3 /opt/agent_licence/parser.py
+ExecStart=/opt/agent_licence/.venv/bin/python3 -m scripts.parser
 TimeoutStartSec=3600
 
 NoNewPrivileges=true

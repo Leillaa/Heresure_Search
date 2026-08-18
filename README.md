@@ -12,15 +12,15 @@ a server, migrating the database, updating a live deployment), see
 
 ## What it does
 
-1. **Daily data pull** — `parser.py` downloads Florida DFS's public
+1. **Daily data pull** — `scripts/parser.py` downloads Florida DFS's public
    license CSV, filters it down to life/health agents in the two target
    counties, and inserts only the *new* ones into Postgres with
    `checked = false`. Existing rows (and anything staff manually set,
    like `checked` or `Personal Email`) are never touched.
-2. **Web viewer** — `app.py` (Flask) shows the `licenses` table,
+2. **Web viewer** — the Flask app in `app/` shows the `licenses` table,
    paginated, with a filter for `All / Checked / Not checked` and a
    per-row "Send Email" action (currently a UI stub).
-3. **Outreach** — `send_campaign.py` sends one email at a time (single
+3. **Outreach** — `scripts/send_campaign.py` sends one email at a time (single
    recipient per message, rate-limited) to agents where
    `checked = false` and a business email is on file, then flips
    `checked = true` right after each successful send so re-running the
@@ -32,7 +32,7 @@ a server, migrating the database, updating a live deployment), see
                      ┌─────────────────────────────────────────┐
                      │   DigitalOcean droplet (Ubuntu 22.04)    │
                      │                                           │
-  Internet ──HTTPS──▶│  nginx :443 ──▶ gunicorn :8000 ──▶ app.py │
+  Internet ──HTTPS──▶│  nginx :443 ──▶ gunicorn :8000 ─▶ wsgi:app │
                      │      (Let's Encrypt via certbot)          │
                      │                          │                │
                      │                          ▼                │
@@ -41,11 +41,11 @@ a server, migrating the database, updating a live deployment), see
                      │                          ▲                │
                      │                          │                │
                      │   systemd timer (09:00 America/New_York)  │
-                     │        └─▶ parser.py (download+filter+load)│
+                     │    └─▶ scripts.parser (download+filter+load)│
                      └─────────────────────────────────────────┘
 ```
 
-- **App process**: `gunicorn` running `app.py`, managed by systemd unit
+- **App process**: `gunicorn` running `wsgi:app`, managed by systemd unit
   `agent-licence.service` — restarts automatically on crash or reboot.
 - **Reverse proxy**: nginx terminates TLS and forwards to gunicorn on
   `127.0.0.1:8000` (app itself is never exposed directly).
@@ -53,7 +53,7 @@ a server, migrating the database, updating a live deployment), see
   purchased — the site is reachable via a free `sslip.io` hostname that
   resolves to the droplet's IP (see `deploy/server.env`, not in git).
 - **Scheduled data refresh**: systemd timer `agent-licence-parser.timer`
-  runs `parser.py` once a day at 9:00 **America/New_York** (DST-aware).
+  runs `scripts.parser` once a day at 9:00 **America/New_York** (DST-aware).
   It's independent of anyone's laptop being on.
 - **Firewall**: `ufw` — only SSH (22) and HTTP/HTTPS (80/443) are open.
 - **Access**: the site currently has no login (open to anyone with the
@@ -64,36 +64,43 @@ a server, migrating the database, updating a live deployment), see
 
 ```
 Florida DFS public CSV (~330MB, ~1.2M rows)
-        │  parser.py: download + filter
+        │  scripts/parser.py: download + filter
         │  (State=FL, county in {Broward, Miami-Dade}, License Type in life/health set)
         ▼
 staging_licenses.csv
-        │  load_script.sql: dedupe within batch, INSERT ... WHERE NOT EXISTS
+        │  sql/load_script.sql: dedupe within batch, INSERT ... WHERE NOT EXISTS
         │  (match key: Full Name + Business Email — insert-only, never overwrite)
         ▼
 licenses table (Postgres)
         │
-        ├──▶ app.py            (read-only web viewer, filterable by checked)
-        └──▶ send_campaign.py  (reads checked=false rows, emails them, flips checked=true)
+        ├──▶ app/                     (read-only web viewer, filterable by checked)
+        └──▶ scripts/send_campaign.py (reads checked=false rows, emails them, flips checked=true)
 ```
 
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
-| `app.py` | Flask web viewer (paginated table, checked/unchecked filter, Basic Auth support) |
-| `parser.py` | Daily pipeline: download FL DFS registry → filter → load new agents into Postgres |
-| `load_script.sql` | Insert-only-new logic used by `parser.py` (staging table → `licenses`) |
-| `create_table.sql` | `licenses` table schema |
-| `dedupe_licenses.sql` | One-off maintenance: collapse existing duplicate rows (same Full Name + Business Email) |
-| `send_campaign.py` | Rate-limited, one-recipient-per-email outreach sender; marks `checked = true` after each send |
-| `send_test_email.py` | Sends one test email to yourself to verify SMTP creds work |
+| `wsgi.py` | WSGI entry point — `gunicorn wsgi:app`; also the local dev server |
+| `app/` | The Flask application, laid out MVC-style (see below) |
+| `app/config.py` | Single source of configuration for the app *and* the scripts: loads `.env`, exposes the Postgres/auth settings |
+| `app/models/` | Data layer — `db.py` (connection handling) and `license.py` (every SQL statement the app runs) |
+| `app/controllers/` | Request layer — `licenses.py` holds the `/` route as a Flask blueprint |
+| `app/views/` | Presentation helpers — `auth.py` (HTTP Basic Auth decorator) and `filters.py` (Jinja filters) |
+| `app/templates/` | Jinja templates — `index.html` (the paginated table) |
+| `app/static/` | `css/main.css` and `js/main.js` for that page |
+| `scripts/parser.py` | Daily pipeline: download FL DFS registry → filter → load new agents into Postgres |
+| `scripts/send_campaign.py` | Rate-limited, one-recipient-per-email outreach sender; marks `checked = true` after each send |
+| `scripts/send_test_email.py` | Sends one test email to yourself to verify SMTP creds work |
+| `sql/load_script.sql` | Insert-only-new logic used by `scripts/parser.py` (staging table → `licenses`) |
+| `sql/create_table.sql` | `licenses` table schema |
+| `sql/dedupe_licenses.sql` | One-off maintenance: collapse existing duplicate rows (same Full Name + Business Email) |
 | `requirements.txt` | Python dependencies |
 | `.env.example` | Template for local `.env` (DB creds, SMTP creds, optional Basic Auth) — copy, fill in, never commit |
 | `deploy/` | Everything needed to stand up or update the production server — see `deploy/README.md` |
 
 Not part of the running app (kept on disk for history, gitignored,
-superseded by `parser.py` which does download+filter+load in one
+superseded by `scripts/parser.py` which does download+filter+load in one
 scheduled step): `filter_life_licenses.py`, `load_to_db.py` — an older
 two-step manual version of the same pipeline.
 
@@ -106,12 +113,21 @@ pip install -r requirements.txt
 
 cp .env.example .env   # fill in PGPASSWORD (and SMTP_* if testing email)
 
-python3 app.py          # http://127.0.0.1:5000
+python3 wsgi.py         # http://127.0.0.1:5000
 ```
 
-Requires a local Postgres with the `licenses` table (`create_table.sql`)
-and, ideally, data loaded via `parser.py` (needs `PGPASSWORD` set — see
-`.env.example`).
+The scripts are run as modules, always from the repository root, so that
+`import app.config` resolves:
+
+```bash
+python3 -m scripts.parser                              # download + filter + load
+python3 -m scripts.send_campaign --dry-run --limit 3   # show recipients, send nothing
+python3 -m scripts.send_test_email                     # verify SMTP creds
+```
+
+Requires a local Postgres with the `licenses` table
+(`sql/create_table.sql`) and, ideally, data loaded via
+`python3 -m scripts.parser` (needs `PGPASSWORD` set — see `.env.example`).
 
 ## Configuration
 

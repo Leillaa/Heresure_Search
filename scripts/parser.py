@@ -1,4 +1,27 @@
 """
+[EN]
+Downloads the Florida DFS license registry, filters agents by these
+conditions:
+  - Mailing State == FL
+  - Mailing City is in Broward County or Miami-Dade County
+  - License TYCL Desc is life / life & health (including annuity variants)
+and writes the needed fields straight into Postgres (database
+Agents_Heresure, table licenses).
+
+Field transformation rules when writing to the DB:
+  - Full Name        = First Name + Middle Name + Last Name (space-separated, no commas/periods)
+  - License Type       = License TYCL Desc
+  - Mailing Address    = Mailing Address + Mailing Address2 + Mailing City + Mailing State + Mailing Zip
+                          (space-separated, empty parts skipped)
+  - Business Email     = Email Address
+  - Personal Email     = empty (left blank)
+  - checked             = always False
+
+Only NEW agents are inserted into licenses (compared by the Full Name +
+Business Email pair) — existing rows are not touched, so manually-set
+checked / Personal Email values are not overwritten.
+
+[RU]
 Скачивает реестр лицензий Florida DFS, фильтрует агентов по условиям:
   - Mailing State == FL
   - Mailing City относится к Broward County или Miami-Dade County
@@ -27,29 +50,19 @@ from pathlib import Path
 
 import requests
 
-ENV_FILE = Path(__file__).parent / ".env"
-
-
-def load_env(path: Path) -> None:
-    """Простой парсер .env — без сторонних зависимостей (как в остальных
-    скриптах проекта). Не перезаписывает переменные, уже выставленные
-    в окружении (например, systemd Environment=/EnvironmentFile=)."""
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-load_env(ENV_FILE)
+from app.config import PG_BIN, PG_DB, PG_HOST, PG_PORT, PG_USER, PROJECT_ROOT, pg_password
 
 URL = "https://www.myfloridacfo.com/downloads/AAS/LicenseeSearch/AllValidLicensesIndividual.csv"
-RAW_CSV = Path("AllValidLicensesIndividual.csv")
-STAGING_CSV = Path("staging_licenses.csv")
-LOAD_SQL = Path("load_script.sql")
+
+# [EN] Anchored to the project root, not the current directory — the script has
+# to work the same under systemd (WorkingDirectory=/opt/agent_licence) and from
+# a shell in any folder.
+# [RU] Привязано к корню проекта, а не к текущему каталогу — скрипт должен
+# работать одинаково и под systemd (WorkingDirectory=/opt/agent_licence), и из
+# шелла в любой папке.
+RAW_CSV = PROJECT_ROOT / "AllValidLicensesIndividual.csv"
+STAGING_CSV = PROJECT_ROOT / "staging_licenses.csv"
+LOAD_SQL = PROJECT_ROOT / "sql" / "load_script.sql"
 
 headers = {
     "User-Agent": (
@@ -59,20 +72,8 @@ headers = {
     )
 }
 
-# --- параметры подключения к Postgres (локально и на сервере — из .env) ---
-PG_BIN = os.environ.get("PG_BIN", "psql")
-PG_HOST = os.environ.get("PGHOST", "localhost")
-PG_PORT = os.environ.get("PGPORT", "5432")
-PG_USER = os.environ.get("PGUSER", "postgres")
-PG_DB = os.environ.get("PGDATABASE", "Agents_Heresure")
-PG_PASSWORD = os.environ.get("PGPASSWORD")
-if not PG_PASSWORD:
-    raise SystemExit(
-        "Не задана переменная окружения PGPASSWORD "
-        "(проверь .env — см. .env.example)"
-    )
-
-# License TYCL Desc, которые считаем "life" / "life and health"
+# [EN] License TYCL Desc values we treat as "life" / "life and health"
+# [RU] License TYCL Desc, которые считаем "life" / "life and health"
 LIFE_DESCS = {
     "LIFE",
     "LIFE & HEALTH",
@@ -80,7 +81,8 @@ LIFE_DESCS = {
     "LIFE INCL VARIABLE ANNUITY",
 }
 
-# Официальные муниципалитеты Broward County + распространённые написания
+# [EN] Official Broward County municipalities + common spellings
+# [RU] Официальные муниципалитеты Broward County + распространённые написания
 BROWARD_CITIES = {
     "COCONUT CREEK", "COOPER CITY", "CORAL SPRINGS", "DANIA BEACH", "DAVIE",
     "DEERFIELD BEACH", "FORT LAUDERDALE", "FT LAUDERDALE", "FT. LAUDERDALE",
@@ -93,7 +95,8 @@ BROWARD_CITIES = {
     "WILTON MANORS",
 }
 
-# Официальные муниципалитеты Miami-Dade County + распространённые написания
+# [EN] Official Miami-Dade County municipalities + common spellings
+# [RU] Официальные муниципалитеты Miami-Dade County + распространённые написания
 MIAMI_DADE_CITIES = {
     "AVENTURA", "BAL HARBOUR", "BAY HARBOR ISLANDS", "BISCAYNE PARK",
     "CORAL GABLES", "CUTLER BAY", "DORAL", "EL PORTAL", "FLORIDA CITY",
@@ -156,7 +159,8 @@ def download(dest: Path = RAW_CSV) -> Path:
 
 
 def clean(value) -> str:
-    """Убирает Excel-экранирование вида ="12345" -> 12345."""
+    """Strips Excel escaping of the form ="12345" -> 12345.
+    Убирает Excel-экранирование вида ="12345" -> 12345."""
     value = (value or "").strip()
     if value.startswith('="') and value.endswith('"'):
         value = value[2:-1]
@@ -164,7 +168,8 @@ def clean(value) -> str:
 
 
 def clean_name_part(value: str) -> str:
-    """Убирает запятые/точки из части имени, схлопывает пробелы."""
+    """Removes commas/periods from a name part, collapses whitespace.
+    Убирает запятые/точки из части имени, схлопывает пробелы."""
     value = re.sub(r"[,.]", " ", value)
     return re.sub(r"\s+", " ", value).strip()
 
@@ -190,7 +195,8 @@ def build_mailing_address(row: dict) -> str:
 
 
 def filter_and_transform(csv_path: Path):
-    """Стримит исходный CSV и yield-ит уже готовые для записи в БД строки."""
+    """Streams the source CSV and yields rows already prepared for DB insert.
+    Стримит исходный CSV и yield-ит уже готовые для записи в БД строки."""
     total = 0
     matched = 0
 
@@ -225,9 +231,9 @@ def filter_and_transform(csv_path: Path):
             }
 
             if total % 200_000 == 0:
-                print(f"...обработано {total} строк, подошло {matched}")
+                print(f"...processed {total} rows, matched {matched}")
 
-    print(f"Фильтрация завершена. Всего строк: {total}. Подошло под условия: {matched}.")
+    print(f"Filtering done. Total rows: {total}. Matched conditions: {matched}.")
 
 
 def write_staging_csv(rows, dest: Path = STAGING_CSV) -> int:
@@ -243,7 +249,7 @@ def write_staging_csv(rows, dest: Path = STAGING_CSV) -> int:
 
 def load_into_postgres() -> None:
     env = os.environ.copy()
-    env["PGPASSWORD"] = PG_PASSWORD
+    env["PGPASSWORD"] = pg_password()
 
     before = subprocess.run(
         [PG_BIN, "-h", PG_HOST, "-p", PG_PORT, "-U", PG_USER, "-d", PG_DB,
@@ -255,6 +261,15 @@ def load_into_postgres() -> None:
         [PG_BIN, "-h", PG_HOST, "-p", PG_PORT, "-U", PG_USER, "-d", PG_DB,
          "-f", str(LOAD_SQL)],
         env=env, check=True,
+        # [EN] The \copy in sql/load_script.sql is a CLIENT-side psql
+        # meta-command: its path is resolved against psql's own CWD, and psql
+        # performs NO variable interpolation inside \copy arguments — so the
+        # only way to make it CWD-independent is to pin psql's CWD here.
+        # [RU] \copy в sql/load_script.sql — КЛИЕНТСКАЯ meta-команда psql: путь
+        # считается от собственного CWD psql, и psql НЕ подставляет переменные
+        # внутрь аргументов \copy — поэтому единственный способ избавиться от
+        # зависимости от CWD это зафиксировать CWD самого psql здесь.
+        cwd=STAGING_CSV.parent,
     )
 
     after = subprocess.run(
@@ -263,15 +278,15 @@ def load_into_postgres() -> None:
         env=env, capture_output=True, text=True, check=True,
     ).stdout.strip()
 
-    print(f"В базе было: {before} строк, стало: {after} строк "
-          f"(добавлено новых: {int(after) - int(before)}).")
+    print(f"Rows before: {before}, after: {after} "
+          f"(new rows added: {int(after) - int(before)}).")
 
 
 def main() -> None:
     csv_path = download()
     rows = filter_and_transform(csv_path)
     count = write_staging_csv(rows)
-    print(f"Подготовлено к загрузке: {count} строк ({STAGING_CSV.resolve()}).")
+    print(f"Prepared for load: {count} rows ({STAGING_CSV.resolve()}).")
     load_into_postgres()
 
 
