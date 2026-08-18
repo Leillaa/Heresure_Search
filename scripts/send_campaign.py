@@ -1,4 +1,26 @@
 """
+[EN]
+Email campaign to agents from the database (licenses) whose checked = False.
+
+Logic:
+  1. Pull rows with checked = False from the DB (those that have a Business Email).
+  2. Send emails ONE AT A TIME — each email has only one address in "To",
+     the recipient can't see that it went anywhere else.
+  3. A pause between emails (protection against spam filters / provider bans).
+  4. Immediately after a successful send, mark the row checked = True in the DB —
+     if the script crashes midway, a re-run won't email people who were already
+     contacted.
+  5. A hard cap on emails per run (--limit), small by default, so you don't
+     accidentally blast thousands of addresses.
+
+SMTP details — from .env (see send_test_email.py).
+
+Run:
+    python3 -m scripts.send_campaign                # up to 5 emails (default), 5 sec pause
+    python3 -m scripts.send_campaign --limit 20 --delay 8
+    python3 -m scripts.send_campaign --dry-run       # only show who would receive it, send nothing
+
+[RU]
 Рассылка писем агентам из базы (licenses), у которых checked = False.
 
 Логика:
@@ -15,9 +37,9 @@
 SMTP-данные — из .env (см. send_test_email.py).
 
 Запуск:
-    python3 send_campaign.py                # до 5 писем (дефолт), пауза 5 сек
-    python3 send_campaign.py --limit 20 --delay 8
-    python3 send_campaign.py --dry-run       # только показать, кому бы ушло, ничего не отправлять
+    python3 -m scripts.send_campaign                # до 5 писем (дефолт), пауза 5 сек
+    python3 -m scripts.send_campaign --limit 20 --delay 8
+    python3 -m scripts.send_campaign --dry-run       # только показать, кому бы ушло, ничего не отправлять
 """
 
 import argparse
@@ -30,53 +52,38 @@ import subprocess
 import sys
 import time
 from email.message import EmailMessage
-from pathlib import Path
 
-ENV_FILE = Path(__file__).parent / ".env"
-
-PG_BIN = os.environ.get("PG_BIN", "psql")
-PG_HOST = os.environ.get("PGHOST", "localhost")
-PG_PORT = os.environ.get("PGPORT", "5432")
-PG_USER = os.environ.get("PGUSER", "postgres")
-PG_DB = os.environ.get("PGDATABASE", "Agents_Heresure")
-PG_PASSWORD = None  # заполняется в main() после load_env(), без дефолта-секрета
+# [EN] All of these are read in app/config.py AFTER it has loaded .env — which is
+# what makes PGHOST/PGPORT/PGUSER/PGDATABASE from .env actually take effect here.
+# Before the config was centralised, this module read them at import time, before
+# its own load_env() ran in main(), so .env was silently ignored for those four
+# and the script always talked to localhost/postgres/Agents_Heresure.
+# [RU] Все они читаются в app/config.py ПОСЛЕ загрузки .env — именно поэтому
+# PGHOST/PGPORT/PGUSER/PGDATABASE из .env здесь наконец работают. До выноса
+# конфига модуль читал их при импорте, ещё до своего load_env() в main(), так что
+# .env для этих четырёх молча игнорировался и скрипт всегда шёл на
+# localhost/postgres/Agents_Heresure.
+from app.config import PG_BIN, PG_DB, PG_HOST, PG_PORT, PG_USER, get_required, pg_password
 
 SUBJECT = "Test email"
 BODY_TEMPLATE = (
-    "Здравствуйте, {name}.\n\n"
-    "Это тестовое письмо. Если вы его получили — рассылка настроена верно.\n"
+    "Hello, {name}.\n\n"
+    "This is a test email. If you received it, the campaign is configured correctly.\n"
 )
 
 DEFAULT_LIMIT = 5
 DEFAULT_DELAY = 5.0
 
 
-def load_env(path: Path) -> None:
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def get_required(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise SystemExit(f"Не задана переменная {name} (проверь .env)")
-    return value
-
-
 def pg_env():
     env = os.environ.copy()
-    env["PGPASSWORD"] = PG_PASSWORD
+    env["PGPASSWORD"] = pg_password()
     return env
 
 
 def fetch_candidates(limit: int):
-    """Тянет из БД строки с checked = False, у кого есть Business Email."""
+    """Pulls rows with checked = False from the DB that have a Business Email.
+    Тянет из БД строки с checked = False, у кого есть Business Email."""
     query = (
         'COPY (SELECT id, "Full Name", "Business Email" FROM licenses '
         'WHERE checked = false '
@@ -105,7 +112,7 @@ def send_one(server: smtplib.SMTP, mail_from: str, to_addr: str, name: str) -> N
     msg["Subject"] = SUBJECT
     msg["From"] = mail_from
     msg["To"] = to_addr
-    msg.set_content(BODY_TEMPLATE.format(name=name or "коллега"))
+    msg.set_content(BODY_TEMPLATE.format(name=name or "colleague"))
     server.send_message(msg)
 
 
@@ -121,32 +128,33 @@ def open_smtp(host: str, port: int, user: str, password: str) -> smtplib.SMTP:
 
 
 def main() -> None:
-    global PG_PASSWORD
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
-                         help=f"Максимум писем за один запуск (по умолчанию {DEFAULT_LIMIT})")
+                         help=f"Max emails per run (default {DEFAULT_LIMIT})")
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY,
-                         help=f"Пауза между письмами в секундах (по умолчанию {DEFAULT_DELAY})")
+                         help=f"Pause between emails in seconds (default {DEFAULT_DELAY})")
     parser.add_argument("--dry-run", action="store_true",
-                         help="Только показать список получателей, ничего не отправлять и не менять БД")
+                         help="Only show the recipient list, send nothing and don't change the DB")
     args = parser.parse_args()
 
-    load_env(ENV_FILE)  # нужен и для dry-run — без пароля к БД не подключиться
-    PG_PASSWORD = get_required("PGPASSWORD")
+    # [EN] .env is already loaded by app.config at import; fail here rather than
+    # inside the first psql call, so --dry-run also stops early without a password.
+    # [RU] .env уже загружен app.config при импорте; падаем здесь, а не внутри
+    # первого вызова psql, чтобы и --dry-run останавливался сразу без пароля.
+    pg_password()
 
     candidates = fetch_candidates(args.limit)
 
     if not candidates:
-        print("Нет строк с checked = False и заполненным Business Email — отправлять некому.")
+        print("No rows with checked = False and a filled-in Business Email — no one to send to.")
         return
 
-    print(f"Найдено кандидатов: {len(candidates)} (лимит {args.limit}).")
+    print(f"Candidates found: {len(candidates)} (limit {args.limit}).")
 
     if args.dry_run:
         for row in candidates:
             print(f"  [dry-run] id={row['id']} -> {row['Business Email']} ({row['Full Name']})")
-        print("Dry-run: письма не отправлялись, БД не менялась.")
+        print("Dry-run: no emails sent, DB unchanged.")
         return
 
     host = get_required("SMTP_HOST")
@@ -169,10 +177,10 @@ def main() -> None:
                 send_one(server, mail_from, to_addr, name)
                 mark_checked(row_id)
                 sent += 1
-                print(f"  [{i+1}/{len(candidates)}] отправлено -> {to_addr}")
+                print(f"  [{i+1}/{len(candidates)}] sent -> {to_addr}")
             except Exception as exc:
                 failed += 1
-                print(f"  [{i+1}/{len(candidates)}] ОШИБКА для {to_addr}: {exc}", file=sys.stderr)
+                print(f"  [{i+1}/{len(candidates)}] ERROR for {to_addr}: {exc}", file=sys.stderr)
 
             if i < len(candidates) - 1:
                 time.sleep(args.delay)
@@ -182,7 +190,7 @@ def main() -> None:
         except Exception:
             pass
 
-    print(f"Готово. Отправлено: {sent}. Ошибок: {failed}.")
+    print(f"Done. Sent: {sent}. Errors: {failed}.")
 
 
 if __name__ == "__main__":

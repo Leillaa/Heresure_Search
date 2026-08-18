@@ -1,0 +1,18 @@
+# VCS / local tooling
+.git/
+.claude/
+
+# virtual environments & Python caches
+.venv/
+.venv-1/
+__pycache__/
+*.pyc
+
+# secrets — config comes from docker-compose environment, not .env
+.env
+
+# large / PII data files (never bake into the image)
+AllValidLicensesIndividual.csv
+life_licenses_broward_miamidade.txt
+staging_licenses.csv
+*.dump

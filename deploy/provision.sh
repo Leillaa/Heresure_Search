@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# Одноразовый bootstrap ЧИСТОГО droplet'а (Ubuntu 22.04) под это приложение.
+# [EN] One-time bootstrap of a CLEAN droplet (Ubuntu 22.04) for this application.
+# Run ON THE SERVER as root right after creating the droplet:
+#
+#   bash provision.sh '<password_for_the_agents_app_DB>'
+#
+# Make up the password for the agents_app role in Postgres yourself (e.g. openssl rand -base64 24)
+# and don't lose it — it also goes into .env as PGPASSWORD.
+#
+# [RU] Одноразовый bootstrap ЧИСТОГО droplet'а (Ubuntu 22.04) под это приложение.
 # Запускать НА СЕРВЕРЕ от root сразу после создания droplet'а:
 #
 #   bash provision.sh '<пароль_для_БД_agents_app>'
@@ -9,30 +17,30 @@
 
 set -euo pipefail
 
-DB_PASSWORD="${1:?Использование: bash provision.sh <пароль_для_роли_agents_app>}"
+DB_PASSWORD="${1:?Usage: bash provision.sh <password_for_the_agents_app_role>}"
 
 APP_USER="agentapp"
 APP_DIR="/opt/agent_licence"
 DB_NAME="Agents_Heresure"
 DB_USER="agents_app"
 
-echo "==> apt update и установка пакетов"
+echo "==> apt update and package install"
 apt-get update -y
 apt-get install -y python3-venv python3-pip postgresql postgresql-contrib nginx ufw git
 
-echo "==> firewall (открываем только SSH и HTTP/HTTPS)"
+echo "==> firewall (open only SSH and HTTP/HTTPS)"
 ufw allow OpenSSH
 ufw allow 'Nginx Full'
 ufw --force enable
 
-echo "==> системный пользователь под приложение (без shell, без sudo)"
+echo "==> system user for the app (no shell, no sudo)"
 id -u "$APP_USER" &>/dev/null || useradd --system --create-home --shell /usr/sbin/nologin "$APP_USER"
 
-echo "==> каталог приложения"
+echo "==> app directory"
 mkdir -p "$APP_DIR"
 chown "$APP_USER":"$APP_USER" "$APP_DIR"
 
-echo "==> роль и база в Postgres"
+echo "==> role and database in Postgres"
 sudo -u postgres psql -v ON_ERROR_STOP=1 -c "
 DO \$\$
 BEGIN
@@ -49,16 +57,16 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}
 
 echo
 echo "======================================================================"
-echo "Готово. Дальше вручную (см. deploy/README.md):"
-echo "  1) залить код в $APP_DIR (git clone https://github.com/Leillaa/Heresure_Search.git)"
+echo "Done. Next, manually (see deploy/README.md):"
+echo "  1) upload the code to $APP_DIR (git clone https://github.com/Leillaa/Heresure_Search.git)"
 echo "  2) su - $APP_USER -s /bin/bash -c \"cd $APP_DIR && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt\""
-echo "  3) создать $APP_DIR/.env (по образцу .env.example):"
+echo "  3) create $APP_DIR/.env (based on .env.example):"
 echo "       PGHOST=localhost"
 echo "       PGUSER=${DB_USER}"
 echo "       PGDATABASE=${DB_NAME}"
 echo "       PGPASSWORD=${DB_PASSWORD}"
-echo "     (BASIC_AUTH_USERS не заполняйте — сайт пока открыт без логина/пароля)"
-echo "  4) залить дамп базы (scp) и восстановить:"
+echo "     (leave BASIC_AUTH_USERS empty — the site is open without login/password for now)"
+echo "  4) upload the database dump (scp) and restore it:"
 echo "       PGPASSWORD=${DB_PASSWORD} deploy/restore_db.sh /root/agents_heresure_*.dump"
-echo "  5) поставить systemd unit (deploy/agent-licence.service) и nginx (deploy/nginx.conf)"
+echo "  5) install the systemd unit (deploy/agent-licence.service) and nginx (deploy/nginx.conf)"
 echo "======================================================================"

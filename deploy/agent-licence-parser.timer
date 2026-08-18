@@ -1,8 +1,10 @@
 [Unit]
-Description=Ежедневный запуск agent-licence-parser в 9:00 по Нью-Йорку
+Description=Daily run of agent-licence-parser at 9:00 New York time / Ежедневный запуск agent-licence-parser в 9:00 по Нью-Йорку
 
 [Timer]
-# Часовой пояс прямо в спецификации — systemd сам учитывает переход
+# [EN] Timezone right in the spec — systemd handles the DST switch (EST/EDT)
+# on its own, unlike a plain cron with TZ=.
+# [RU] Часовой пояс прямо в спецификации — systemd сам учитывает переход
 # на летнее/зимнее время (EST/EDT), в отличие от обычного cron с TZ=.
 OnCalendar=*-*-* 09:00:00 America/New_York
 Persistent=true

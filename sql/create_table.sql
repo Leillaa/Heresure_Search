@@ -1,4 +1,5 @@
--- Таблица под лицензии агентов
+-- [EN] Table for agent licenses
+-- [RU] Таблица под лицензии агентов
 CREATE TABLE IF NOT EXISTS licenses (
     id                BIGSERIAL PRIMARY KEY,
     "License Number"  TEXT,
