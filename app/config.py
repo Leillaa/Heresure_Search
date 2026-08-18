@@ -79,15 +79,63 @@ def pg_password() -> str:
     return get_required("PGPASSWORD")
 
 
-# [EN] HTTP Basic Auth — on the server the database holds real names/emails/phones,
-# access is team-only. Format in .env: BASIC_AUTH_USERS=user1:pass1,user2:pass2
-# If the variable is unset, auth is disabled (for local development).
-# [RU] HTTP Basic Auth — на сервере в базе реальные ФИО/email/телефоны, доступ
-# только для команды. Формат в .env: BASIC_AUTH_USERS=user1:pass1,user2:pass2
-# Если переменная не задана — auth выключена (для локальной разработки).
-_raw_users = os.environ.get("BASIC_AUTH_USERS", "")
-BASIC_AUTH_USERS = dict(
-    pair.split(":", 1) for pair in _raw_users.split(",") if ":" in pair
+def secret_key() -> str:
+    """[EN] Signs the session cookie. A function, not a constant, for the same
+    reason as pg_password(): send_test_email.py imports this module for SMTP
+    settings only and must not be blocked by a missing SECRET_KEY. create_app()
+    calls it at boot, so the web app still fails fast.
+
+    Losing or changing this value invalidates every existing session — everyone
+    is logged out. It must therefore be stable and secret; generate one with
+    `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`.
+
+    [RU] Подписывает cookie сессии. Функция, а не константа, по той же причине,
+    что и pg_password(): send_test_email.py импортирует этот модуль только за
+    SMTP-настройками, и отсутствие SECRET_KEY не должно его блокировать.
+    create_app() вызывает её при старте, поэтому веб-приложение по-прежнему
+    падает сразу.
+
+    Потеря или смена значения делает недействительными все текущие сессии —
+    все разлогиниваются. Поэтому оно должно быть постоянным и секретным;
+    сгенерировать: `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`."""
+    return get_required("SECRET_KEY")
+
+
+def _int_env(name: str, default: int) -> int:
+    """[EN] Tolerant int parser — a malformed value falls back to the default
+    rather than taking the whole app down at import.
+    [RU] Терпимый парсер int — некорректное значение откатывается к значению по
+    умолчанию, а не роняет всё приложение при импорте."""
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+# [EN] How long a login lasts. The session cookie is "permanent" in Flask's
+# sense, so closing the browser does not log the user out — that is what
+# "stays logged in across sessions" requires.
+# [RU] Сколько живёт вход. Cookie сессии "permanent" в терминах Flask, поэтому
+# закрытие браузера не разлогинивает — это и требуется от "остаётся в системе
+# между сессиями".
+SESSION_LIFETIME_DAYS = _int_env("SESSION_LIFETIME_DAYS", 14)
+
+# [EN] Send the session cookie over HTTPS only. Must stay false for local http
+# development, and MUST be true on the server (nginx terminates TLS there).
+# [RU] Отправлять cookie сессии только по HTTPS. Должно оставаться false для
+# локальной разработки по http и ОБЯЗАТЕЛЬНО true на сервере (TLS терминирует nginx).
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() in (
+    "1", "true", "yes", "on",
 )
+
+# [EN] Invite links expire — an old link found in a chat log should not still
+# grant access.
+# [RU] Ссылки-приглашения истекают — старая ссылка, найденная в переписке, не
+# должна по-прежнему давать доступ.
+INVITE_TTL_HOURS = _int_env("INVITE_TTL_HOURS", 72)
+
+# [EN] Minimum password length enforced when an invite is accepted.
+# [RU] Минимальная длина пароля при принятии приглашения.
+PASSWORD_MIN_LENGTH = _int_env("PASSWORD_MIN_LENGTH", 10)
 
 PAGE_SIZE = 50
